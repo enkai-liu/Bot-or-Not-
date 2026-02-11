@@ -1,6 +1,9 @@
 import json
-from typing import Dict
+import pandas as pd
+from typing import Dict, List
+from pathlib import Path
 
+from characteristics import process_tweets
 
 class User:
     def __init__(
@@ -21,53 +24,75 @@ class User:
         self.description = description
         self.location = location
         self.posts = []
+        self.characteristics = {}
 
     def add_post(self, post: dict):
         self.posts.append(post)
 
+    def calculate_stats(self):
+        """
+        Passes full post objects and user metadata to process_tweets
+        to generate the required columns.
+        """
+        user_meta = {
+            "tweet_count": self.tweet_count,
+            "z_score": self.z_score,
+            "description": self.description
+        }
+        
+        if self.posts:
+            self.characteristics = process_tweets(self.posts, user_meta)
+        else:
+            self.characteristics = process_tweets([], user_meta)
+
+    def to_rows(self):
+        if not self.posts:
+            base_data = {
+                "user_id": self.id,
+                "username": self.username,
+                "name": self.name,
+                "location": self.location,
+                "z_score": self.z_score,
+                "post_id": None,
+                "text": None,
+                "created_at": None,
+                "lang": None
+            }
+            base_data.update(self.characteristics)
+            return [base_data]
+        
+        rows = []
+        for p in self.posts:
+            row_data = {
+                "user_id": self.id,
+                "username": self.username,
+                "name": self.name,
+                "location": self.location,
+                "z_score": self.z_score,
+                "post_id": p.get("id"),
+                "text": p.get("text"),
+                "created_at": p.get("created_at"),
+                "lang": p.get("language")
+            }
+            row_data.update(self.characteristics)
+            rows.append(row_data)
+        return rows
+
     def __repr__(self):
         return f"<User {self.username} | posts={len(self.posts)}>"
-
-    def __str__(self):
-        lines = [
-            f"User ID: {self.id}",
-            f"Username: {self.username}",
-            f"Name: {self.name}",
-            f"Tweet Count: {self.tweet_count}",
-            f"Z-Score: {self.z_score}",
-            f"Location: {self.location}",
-            f"Description: {self.description}",
-            f"Total Posts: {len(self.posts)}",
-        ]
-
-        for i, post in enumerate(self.posts, start=1):
-            lines.append(f"  Post {i}:")
-            lines.append(f"    ID: {post.get('id')}")
-            lines.append(f"    Created At: {post.get('created_at')}")
-            lines.append(f"    Language: {post.get('language')}")
-            lines.append(f"    Text: {post.get('text')}")
-
-        return "\n".join(lines)
-
 
 def parse_dataset(raw_json: str) -> Dict:
     data = json.loads(raw_json)
 
-    # --- Metadata ---
     metadata = {
         "id": data.get("id"),
-        "language": data.get("lang"),
-        "start_time": data["metadata"].get("start_time"),
-        "end_time": data["metadata"].get("end_time"),
         "total_users": data["metadata"].get("total_amount_users"),
         "total_posts": data["metadata"].get("total_amount_posts"),
-        "avg_posts_per_user": data["metadata"].get("users_average_amount_posts"),
-        "avg_z_score": data["metadata"].get("users_average_z_score"),
     }
 
-    # --- Users (id → User object) ---
     users: Dict[str, User] = {}
-
+    
+    # Parse Users
     for u in data.get("users", []):
         user = User(
             user_id=u.get("id"),
@@ -80,7 +105,6 @@ def parse_dataset(raw_json: str) -> Dict:
         )
         users[user.id] = user
 
-    # --- Posts (attach to users) ---
     for p in data.get("posts", []):
         post_data = {
             "id": p.get("id"),
@@ -88,35 +112,48 @@ def parse_dataset(raw_json: str) -> Dict:
             "created_at": p.get("created_at"),
             "language": p.get("lang"),
         }
-
         author_id = p.get("author_id")
+        
+        if author_id not in users:
+            users[author_id] = User(user_id=author_id)
+            
+        users[author_id].add_post(post_data)
 
-        if author_id in users:
-            users[author_id].add_post(post_data)
-        else:
-            # Handle missing user
-            unknown = User(user_id=author_id)
-            unknown.add_post(post_data)
-            users[author_id] = unknown
+    return {"metadata": metadata, "users": users}
 
-    # --- Topics ---
-    topics = [
-        {"topic": t.get("topic"), "keywords": t.get("keywords", [])}
-        for t in data["metadata"].get("topics", [])
-    ]
+folder_name = "datasets"
+filename = "dataset.posts&users.30.json"
+file_path = Path(folder_name) / filename
 
-    return {
-        "metadata": metadata,
-        "topics": topics,
-        "users": users,  # User objects
-    }
+try:
+    with open(file_path, "r", encoding="utf-8") as f:
+        raw_json = f.read()
 
+    parsed = parse_dataset(raw_json)
 
-with open("datasets/dataset.posts&users.30.json", "r", encoding="utf-8") as f:
-    raw_json = f.read()
+    all_rows = []
 
-parsed = parse_dataset(raw_json)
+    print("Processing users and characteristics...")
+    for user in parsed["users"].values():
+        user.calculate_stats()
+        
+        user_rows = user.to_rows()
+        all_rows.extend(user_rows)
 
-for user in parsed["users"].values():
-    print(user)
-    break
+    df = pd.DataFrame(all_rows)
+
+    if 'created_at' in df.columns:
+        df['created_at'] = pd.to_datetime(df['created_at'])
+
+    print(f"Generated DataFrame with shape: {df.shape}")
+    print("Columns:", df.columns.tolist())
+    print(df.head())
+
+    output_filename = 'parsed_data_with_characteristics.csv'
+    df.to_csv(output_filename, index=False)
+    print(f"Successfully saved {len(df)} rows to {output_filename}")
+
+except FileNotFoundError:
+    print(f"Error: The file '{filename}' was not found in '{folder_name}'.")
+except Exception as e:
+    print(f"An error occurred: {e}")

@@ -1,0 +1,115 @@
+import pandas as pd
+import numpy as np
+import warnings
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report
+from sklearn.impute import SimpleImputer
+
+warnings.filterwarnings('ignore')
+
+INPUT_FILE = 'parsed_data_with_characteristics.csv'
+
+bot_uuids = {
+    "d661fe96-ddf5-41e9-a74f-43b7064ea069", "8a2dcd0a-4506-48bb-97ac-b899c32ba5de",
+    "2ad53f8c-94f1-473b-91ae-3a89588c3998", "159bddb1-f6d4-481d-8ffd-777b05ecf129",
+    "0080165a-4276-4f48-83bb-6b0fa82f50fd", "57ecd89d-5bca-4a39-ae8d-bc02663c21d2",
+    "76328515-ec21-4c4d-a784-25efcc47d271", "9d8de2c4-3095-4fad-b706-8ce6ae3dd7bf",
+    "7b4e8c84-af09-4854-af59-4b3ee78d2241", "97455c20-c7c0-4345-aa82-7b382be4fd73",
+    "6af877e2-ba66-4f07-8907-d1021a6d4aa5", "0339b1ed-b630-407a-b4c9-f0f577b05518",
+    "cb946732-b856-43ec-9905-5463d4779014", "c2af8c73-2bc2-415b-abaa-2fd5083b56e8",
+    "595e7e6a-a2f9-46d2-9239-3b62e052d442", "fef23847-6671-4d07-9788-4c75bd7ea170",
+    "0ed33b26-e3f5-4bce-ad14-fb441a94a78d", "ddb663c1-0780-4300-8f09-5fbfe3ff3269",
+    "a2eba85e-7413-4a23-bd38-8c3fa2c13eda", "90a23eec-e7b9-43ea-b27b-e109650a3377",
+    "6f8d80c7-0f27-4cd5-9275-5912ae8b0872", "c5050746-b806-4bb2-96e1-432cce9311f3",
+    "7bf9d921-e407-4da3-b1bb-7de1175271e3", "a191543e-d61e-4b44-b5ca-0ebb4b247fe7",
+    "f346444a-3bd4-432b-87d4-5744a126e94d", "92e91201-6b8c-4e29-9b7d-146fe2506053",
+    "648213cf-6613-496b-bf6c-0d092bbbd75e", "6054b9db-e01a-4f41-a909-b3d80a62006a",
+    "830cd890-c29d-4e84-94af-6063b7071fa7", "a7c5380d-0e53-4f11-8e83-f6ba27a28303",
+    "f04d9c8f-5db8-4424-b338-7d14c11368ab", "d8589b87-2db7-4e7a-85f0-e7235cd8e1d9",
+    "ca6e30fe-e008-4df9-bafe-e5943451d616", "fb26a0c9-c2d9-4ce4-a897-92347a27239f",
+    "e7edb511-2a2b-4c4f-8d39-16d57490409c", "b0904d5b-08d1-42b9-b195-a7718a9e327b",
+    "8a2a7c48-23b1-4eef-9ebe-ce48a8a34361", "6a62ada9-d4f0-4091-b3de-8637b548e2fd",
+    "a0474f6e-9a0e-40a8-a87c-cce02835e7bb", "2dfdd1ec-4ec6-4e52-ad7b-46787ccd8708",
+    "d78905cd-28d0-40f7-9b00-79c13ec506d1", "58983bd7-8269-44ee-993b-2e5901e0ebc1",
+    "d9bf4aff-69e8-4f3a-9d54-e997658c3b1b", "405158e7-6f21-4c8a-b7d0-9a7018f3c1d9",
+    "c4ae9c45-4be2-49a4-9988-57562192a660", "d45f5ed1-aa10-461b-9346-ca0950a3bdc1",
+    "b14b09a3-283d-4a75-8e57-22d34d68c4c8", "fc4403ca-8464-497f-b683-8089e3b86735",
+    "962cbe6b-cbb6-467d-b587-5ce2c90a7c22", "d37863ac-9df1-4c79-bea7-132074c4d9ee",
+    "a9faacc6-66ce-438d-99fa-fcbedba108fb", "a8c37d8c-48a2-4a3c-91c0-ccd06a4a2bcc",
+    "a42ec2bb-f8e5-4d08-ab91-29a51b791f7c", "b7517523-cc86-45e7-a9ba-c6f28e77c00a",
+    "4c97d4cd-191b-442d-9104-9992bafa9e9b", "b6d1ae84-f5d2-4c27-9c0e-86f4c719a724",
+    "025b09f5-2d9b-43e6-a0a1-a928cc2c9f0b", "7b152e96-45fd-476a-b985-1fd3e420f656",
+    "c2d05544-bbef-4583-9aa4-9ddd7306e8e5", "7e845ad6-2b93-4036-b252-3073d27bee5a",
+    "0837f336-31b7-4d7b-be9e-fd3b94766230", "c620f77b-d71c-4304-b0f9-deaf769eae26",
+    "c2a803a7-af82-4de9-b4ac-4643d6404e37", "8fb0b151-2d1b-4f20-b6f4-75b25b599400",
+    "2e39245d-a05a-4504-b030-bb2b64f31383", "8b02b826-fdda-400f-90ad-8ff07c57b89b",
+}
+
+def load_and_preprocess(filepath):
+    try:
+        df = pd.read_csv(filepath)
+        print(f"Loaded {len(df)} rows from {filepath}")
+    except FileNotFoundError:
+        print(f"Error: {filepath} not found. Please run data_parser.py first.")
+        return None, None
+
+    exclude_cols = {'user_id', 'username', 'name', 'location', 'z_score', 
+                   'post_id', 'text', 'created_at', 'lang'}
+    
+    characteristic_cols = [c for c in df.columns if c not in exclude_cols]
+    
+    numeric_characteristic_cols = []
+    for col in characteristic_cols:
+        if pd.api.types.is_numeric_dtype(df[col]):
+            numeric_characteristic_cols.append(col)
+    
+    print(f"Detected new numeric features: {numeric_characteristic_cols}")
+
+    agg_rules = {
+        'z_score': 'first',
+        'location': 'first',
+        'text': 'count'
+    }
+    
+    for col in numeric_characteristic_cols:
+        agg_rules[col] = 'first'
+
+    user_df = df.groupby('user_id').agg(agg_rules).rename(columns={'text': 'post_count'}).reset_index()
+
+    user_df['has_location'] = user_df['location'].apply(lambda x: 1 if pd.notnull(x) and str(x).strip() != "" else 0)
+    
+    user_df['isBot'] = user_df['user_id'].apply(lambda x: 1 if x in bot_uuids else 0)
+
+    cols_to_fill = ['z_score'] + numeric_characteristic_cols
+    for col in cols_to_fill:
+        user_df[col] = user_df[col].fillna(0)
+
+    feature_cols = ['post_count', 'z_score', 'has_location'] + numeric_characteristic_cols
+    
+    return user_df, feature_cols
+
+
+user_df, feature_cols = load_and_preprocess(INPUT_FILE)
+
+if user_df is not None:
+    X = user_df[feature_cols]
+    y = user_df['isBot']
+
+    print(f"\nTraining with features: {feature_cols}")
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    rf_classifier = RandomForestClassifier(n_estimators=100, random_state=42)
+    rf_classifier.fit(X_train, y_train)
+
+    y_pred = rf_classifier.predict(X_test)
+
+    print(f"\nModel Accuracy: {accuracy_score(y_test, y_pred):.2f}")
+    print("\nClassification Report:\n", classification_report(y_test, y_pred))
+
+    importances = rf_classifier.feature_importances_
+    indices = np.argsort(importances)[::-1]
+    print("\nFeature Importances:")
+    for f in range(X_train.shape[1]):
+        print(f"{f + 1}. {feature_cols[indices[f]]} ({importances[indices[f]]:.4f})")
