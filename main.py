@@ -2,13 +2,13 @@ import pandas as pd
 import numpy as np
 import warnings
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.impute import SimpleImputer
 
 warnings.filterwarnings('ignore')
 
-INPUT_FILE = 'parsed_data_with_characteristics.csv'
+TRAIN_FILE = 'parsed_data_combined_20260211_233535.csv' 
+TEST_FILE = 'parsed_data_combined_20260211_233616.csv'  
 
 bot_uuids = {
     # Dataset 30
@@ -60,7 +60,7 @@ bot_uuids = {
     "f1331ed6-1bad-4a9f-a946-52962341220e", "fd88a5ca-8e3b-49ea-a1ab-bf9c89829214",
     "194ac85e-324b-4e5b-ba15-a089d8ff8b8f", "5b055694-13e2-4233-85bd-ffaf214b6c3e",
     "bd016f7f-603b-4543-b3a8-d18b8269bc4a", "958aa6e0-bc43-4c8f-9fe3-64b7a42451b2",
-    "dddff9d9-5720-478b-901f-8ca3207bd9ae"
+    "dddff9d9-5720-478b-901f-8ca3207bd9ae",
 
     # Dataset 32
     "287eb099-7874-4aea-8371-1b16e2b542ad", "7341009d-7377-4801-9829-1f9881cba3bc",
@@ -94,7 +94,7 @@ bot_uuids = {
     "affbdacc-ecce-4e88-b671-2e1ff85f0034", "8f501399-e747-4022-a0e6-72d94cc8c1a4",
     "8e229365-e29a-4321-b70a-401c14b12139", "8c5f8a42-43aa-4421-8bd8-435fdb3f16f8",
     "653f27c6-1001-45f8-8ddb-6d610bfc4740", "dcf22af4-2648-458a-9f20-da15f2170069",
-    "63518446-4f83-46ab-a436-305ca03fa61c"
+    "63518446-4f83-46ab-a436-305ca03fa61c",
 
     # Dataset 33
     "c2a26675-25ae-4f3f-be49-0a8b296d9028", "a2299350-5477-417f-a276-57482b17f2ff",
@@ -118,7 +118,7 @@ def load_and_preprocess(filepath):
         df = pd.read_csv(filepath)
         print(f"Loaded {len(df)} rows from {filepath}")
     except FileNotFoundError:
-        print(f"Error: {filepath} not found. Please run data_parser.py first.")
+        print(f"Error: {filepath} not found.")
         return None, None
 
     exclude_cols = {'user_id', 'username', 'name', 'location', 'z_score', 
@@ -131,8 +131,6 @@ def load_and_preprocess(filepath):
         if pd.api.types.is_numeric_dtype(df[col]):
             numeric_characteristic_cols.append(col)
     
-    print(f"Detected new numeric features: {numeric_characteristic_cols}")
-
     agg_rules = {
         'z_score': 'first',
         'location': 'first',
@@ -145,38 +143,49 @@ def load_and_preprocess(filepath):
     user_df = df.groupby('user_id').agg(agg_rules).rename(columns={'text': 'post_count'}).reset_index()
 
     user_df['has_location'] = user_df['location'].apply(lambda x: 1 if pd.notnull(x) and str(x).strip() != "" else 0)
-    
     user_df['isBot'] = user_df['user_id'].apply(lambda x: 1 if x in bot_uuids else 0)
 
     cols_to_fill = ['z_score'] + numeric_characteristic_cols
     for col in cols_to_fill:
         user_df[col] = user_df[col].fillna(0)
 
-    feature_cols = ['post_count', 'z_score', 'has_location'] + numeric_characteristic_cols
+    current_feature_cols = ['post_count', 'z_score', 'has_location'] + numeric_characteristic_cols
     
-    return user_df, feature_cols
+    return user_df, current_feature_cols
 
+print("--- Processing Training Data ---")
+train_df, train_features = load_and_preprocess(TRAIN_FILE)
 
-user_df, feature_cols = load_and_preprocess(INPUT_FILE)
+print("\n--- Processing Testing Data ---")
+test_df, _ = load_and_preprocess(TEST_FILE)
 
-if user_df is not None:
-    X = user_df[feature_cols]
-    y = user_df['isBot']
+if train_df is not None and test_df is not None:
+    print(f"\nTraining Features detected: {train_features}")
+    
+    for col in train_features:
+        if col not in test_df.columns:
+            print(f"Warning: Feature '{col}' missing in test data. Filling with 0.")
+            test_df[col] = 0
+            
+    X_train = train_df[train_features]
+    y_train = train_df['isBot']
+    
+    X_test = test_df[train_features] 
+    y_test = test_df['isBot']
 
-    print(f"\nTraining with features: {feature_cols}")
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    print(f"\nTraining Set: {len(X_train)} users")
+    print(f"Testing Set:  {len(X_test)} users")
 
     rf_classifier = RandomForestClassifier(n_estimators=100, random_state=42)
     rf_classifier.fit(X_train, y_train)
 
     y_pred = rf_classifier.predict(X_test)
 
-    print(f"\nModel Accuracy: {accuracy_score(y_test, y_pred):.2f}")
+    print(f"\nModel Accuracy on Test File: {accuracy_score(y_test, y_pred):.2f}")
     print("\nClassification Report:\n", classification_report(y_test, y_pred))
 
     importances = rf_classifier.feature_importances_
     indices = np.argsort(importances)[::-1]
     print("\nFeature Importances:")
-    for f in range(X_train.shape[1]):
-        print(f"{f + 1}. {feature_cols[indices[f]]} ({importances[indices[f]]:.4f})")
+    for f in range(len(train_features)):
+        print(f"{f + 1}. {train_features[indices[f]]} ({importances[indices[f]]:.4f})")

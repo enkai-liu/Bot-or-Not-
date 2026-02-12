@@ -2,6 +2,7 @@ import json
 import pandas as pd
 from typing import Dict, List
 from pathlib import Path
+from datetime import datetime
 
 from characteristics import process_tweets
 
@@ -92,7 +93,6 @@ def parse_dataset(raw_json: str) -> Dict:
 
     users: Dict[str, User] = {}
     
-    # Parse Users
     for u in data.get("users", []):
         user = User(
             user_id=u.get("id"),
@@ -121,39 +121,66 @@ def parse_dataset(raw_json: str) -> Dict:
 
     return {"metadata": metadata, "users": users}
 
-folder_name = "datasets"
-filename = "dataset.posts&users.30.json"
-file_path = Path(folder_name) / filename
-
-try:
-    with open(file_path, "r", encoding="utf-8") as f:
-        raw_json = f.read()
-
-    parsed = parse_dataset(raw_json)
+def main():
+    folder_name = "datasets"
+    
+    print(f"Scanning directory: ./{folder_name}/")
+    file_input = input("Enter JSON filenames separated by commas (e.g., file1.json, file2.json): ")
+    
+    filenames = [name.strip() for name in file_input.split(",") if name.strip()]
+    
+    if not filenames:
+        print("No filenames provided. Exiting.")
+        return
 
     all_rows = []
 
-    print("Processing users and characteristics...")
-    for user in parsed["users"].values():
-        user.calculate_stats()
+    for filename in filenames:
+        file_path = Path(folder_name) / filename
         
-        user_rows = user.to_rows()
-        all_rows.extend(user_rows)
+        print(f"--- Processing {filename} ---")
+        
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                raw_json = f.read()
 
-    df = pd.DataFrame(all_rows)
+            parsed = parse_dataset(raw_json)
+            
+            file_user_count = 0
+            for user in parsed["users"].values():
+                user.calculate_stats()
+                user_rows = user.to_rows()
+                all_rows.extend(user_rows)
+                file_user_count += 1
+            
+            print(f"    Successfully processed {file_user_count} users from {filename}.")
 
-    if 'created_at' in df.columns:
-        df['created_at'] = pd.to_datetime(df['created_at'])
+        except FileNotFoundError:
+            print(f"    Error: The file '{filename}' was not found in '{folder_name}'. Skipping.")
+        except json.JSONDecodeError:
+            print(f"    Error: Failed to decode JSON from '{filename}'. Skipping.")
+        except Exception as e:
+            print(f"    An unexpected error occurred processing '{filename}': {e}")
 
-    print(f"Generated DataFrame with shape: {df.shape}")
-    print("Columns:", df.columns.tolist())
-    print(df.head())
+    if all_rows:
+        df = pd.DataFrame(all_rows)
 
-    output_filename = 'parsed_data_with_characteristics.csv'
-    df.to_csv(output_filename, index=False)
-    print(f"Successfully saved {len(df)} rows to {output_filename}")
+        if 'created_at' in df.columns:
+            df['created_at'] = pd.to_datetime(df['created_at'])
 
-except FileNotFoundError:
-    print(f"Error: The file '{filename}' was not found in '{folder_name}'.")
-except Exception as e:
-    print(f"An error occurred: {e}")
+        print("\n--- Aggregation Complete ---")
+        print(f"Total Combined Shape: {df.shape}")
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_filename = f'parsed_data_combined_{timestamp}.csv'
+        
+        try:
+            df.to_csv(output_filename, index=False)
+            print(f"Successfully saved {len(df)} rows to {output_filename}")
+        except PermissionError:
+            print(f"Error: Could not save to {output_filename}. Is the file open?")
+    else:
+        print("\nNo data was processed successfully.")
+
+if __name__ == "__main__":
+    main()
