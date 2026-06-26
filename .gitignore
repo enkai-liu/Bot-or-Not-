@@ -1,1 +1,11 @@
-.venv
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# OS
+.DS_Store
+
+# Generated feature table (rebuilt by `python main.py`)
+data/features.csv

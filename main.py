@@ -1,191 +1,101 @@
-import pandas as pd
-import numpy as np
+"""Bot-or-Not -- end-to-end pipeline.
+
+Runs the whole thing with one command:
+
+    python main.py
+
+Steps: parse raw datasets -> engineer features -> benchmark models with
+stratified cross-validation -> print a report -> write the feature table and
+the web showcase data.
+
+Flags:
+    --no-export   skip writing JSON/CSV artifacts (just print the report)
+    --quiet       suppress the per-model table
+"""
+from __future__ import annotations
+
+import argparse
 import warnings
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, classification_report
-from sklearn.impute import SimpleImputer
 
-warnings.filterwarnings('ignore')
+from src import export, model
+from src.dataset import build_feature_table, save_feature_table
+from src.parser import load_users
 
-TRAIN_FILE = 'parsed_data_combined_20260211_233535.csv' 
-TEST_FILE = 'parsed_data_combined_20260211_233616.csv'  
+# scikit-learn emits convergence/feature-name chatter that would bury the
+# report; we silence it deliberately rather than globally at import time.
+warnings.filterwarnings("ignore")
 
-bot_uuids = {
-    # Dataset 30
-    "d661fe96-ddf5-41e9-a74f-43b7064ea069", "8a2dcd0a-4506-48bb-97ac-b899c32ba5de",
-    "2ad53f8c-94f1-473b-91ae-3a89588c3998", "159bddb1-f6d4-481d-8ffd-777b05ecf129",
-    "0080165a-4276-4f48-83bb-6b0fa82f50fd", "57ecd89d-5bca-4a39-ae8d-bc02663c21d2",
-    "76328515-ec21-4c4d-a784-25efcc47d271", "9d8de2c4-3095-4fad-b706-8ce6ae3dd7bf",
-    "7b4e8c84-af09-4854-af59-4b3ee78d2241", "97455c20-c7c0-4345-aa82-7b382be4fd73",
-    "6af877e2-ba66-4f07-8907-d1021a6d4aa5", "0339b1ed-b630-407a-b4c9-f0f577b05518",
-    "cb946732-b856-43ec-9905-5463d4779014", "c2af8c73-2bc2-415b-abaa-2fd5083b56e8",
-    "595e7e6a-a2f9-46d2-9239-3b62e052d442", "fef23847-6671-4d07-9788-4c75bd7ea170",
-    "0ed33b26-e3f5-4bce-ad14-fb441a94a78d", "ddb663c1-0780-4300-8f09-5fbfe3ff3269",
-    "a2eba85e-7413-4a23-bd38-8c3fa2c13eda", "90a23eec-e7b9-43ea-b27b-e109650a3377",
-    "6f8d80c7-0f27-4cd5-9275-5912ae8b0872", "c5050746-b806-4bb2-96e1-432cce9311f3",
-    "7bf9d921-e407-4da3-b1bb-7de1175271e3", "a191543e-d61e-4b44-b5ca-0ebb4b247fe7",
-    "f346444a-3bd4-432b-87d4-5744a126e94d", "92e91201-6b8c-4e29-9b7d-146fe2506053",
-    "648213cf-6613-496b-bf6c-0d092bbbd75e", "6054b9db-e01a-4f41-a909-b3d80a62006a",
-    "830cd890-c29d-4e84-94af-6063b7071fa7", "a7c5380d-0e53-4f11-8e83-f6ba27a28303",
-    "f04d9c8f-5db8-4424-b338-7d14c11368ab", "d8589b87-2db7-4e7a-85f0-e7235cd8e1d9",
-    "ca6e30fe-e008-4df9-bafe-e5943451d616", "fb26a0c9-c2d9-4ce4-a897-92347a27239f",
-    "e7edb511-2a2b-4c4f-8d39-16d57490409c", "b0904d5b-08d1-42b9-b195-a7718a9e327b",
-    "8a2a7c48-23b1-4eef-9ebe-ce48a8a34361", "6a62ada9-d4f0-4091-b3de-8637b548e2fd",
-    "a0474f6e-9a0e-40a8-a87c-cce02835e7bb", "2dfdd1ec-4ec6-4e52-ad7b-46787ccd8708",
-    "d78905cd-28d0-40f7-9b00-79c13ec506d1", "58983bd7-8269-44ee-993b-2e5901e0ebc1",
-    "d9bf4aff-69e8-4f3a-9d54-e997658c3b1b", "405158e7-6f21-4c8a-b7d0-9a7018f3c1d9",
-    "c4ae9c45-4be2-49a4-9988-57562192a660", "d45f5ed1-aa10-461b-9346-ca0950a3bdc1",
-    "b14b09a3-283d-4a75-8e57-22d34d68c4c8", "fc4403ca-8464-497f-b683-8089e3b86735",
-    "962cbe6b-cbb6-467d-b587-5ce2c90a7c22", "d37863ac-9df1-4c79-bea7-132074c4d9ee",
-    "a9faacc6-66ce-438d-99fa-fcbedba108fb", "a8c37d8c-48a2-4a3c-91c0-ccd06a4a2bcc",
-    "a42ec2bb-f8e5-4d08-ab91-29a51b791f7c", "b7517523-cc86-45e7-a9ba-c6f28e77c00a",
-    "4c97d4cd-191b-442d-9104-9992bafa9e9b", "b6d1ae84-f5d2-4c27-9c0e-86f4c719a724",
-    "025b09f5-2d9b-43e6-a0a1-a928cc2c9f0b", "7b152e96-45fd-476a-b985-1fd3e420f656",
-    "c2d05544-bbef-4583-9aa4-9ddd7306e8e5", "7e845ad6-2b93-4036-b252-3073d27bee5a",
-    "0837f336-31b7-4d7b-be9e-fd3b94766230", "c620f77b-d71c-4304-b0f9-deaf769eae26",
-    "c2a803a7-af82-4de9-b4ac-4643d6404e37", "8fb0b151-2d1b-4f20-b6f4-75b25b599400",
-    "2e39245d-a05a-4504-b030-bb2b64f31383", "8b02b826-fdda-400f-90ad-8ff07c57b89b",
+FEATURES_CSV = "data/features.csv"
+RESULTS_JSON = "docs/data/results.json"
+RESULTS_JS = "docs/data/results.js"
 
-    # Dataset 31
-    "645c04e9-8c52-455b-b230-8fd061ff1b69", "f03e66fe-9cec-49ea-9150-7b992ab9a75e",
-    "209b5461-5b48-4d1e-9b6a-7a7824e1c523", "8442f5ef-7b34-43a3-955e-9a7f46889707",
-    "c3ce4922-1087-4acc-9ec1-02a48fc8d96d", "0d62fdf9-fad1-44af-842e-2e2f52aed81c",
-    "d6472dcb-f064-45e7-b4ec-18a04e8a7523", "28da13f1-e0aa-4a0f-9d01-3267342e4617",
-    "2b92f8dc-4a32-43d6-bc70-eff03df6a69d", "b25cb321-4299-476f-985b-24a7b93c28c3",
-    "1b9847e8-cf5d-431a-9e96-9cbb70c2c5eb", "339a308e-8386-46ed-b251-ecd93238ee3c",
-    "482f63cb-54e7-42b6-a7c9-36e2209f6792", "5be33e55-4dda-4a1a-a9ef-a16f966c8d52",
-    "8af72e67-d521-42e1-8c7c-44daa4dd4e6d", "e85edca1-3e22-4d87-bf4c-6b4564cf0b04",
-    "0e9beeb0-84b0-4716-9196-3fb8d11be77f", "ba6e4820-bf55-4c54-ac20-96cc271298e3",
-    "0a64309f-3f7b-45e3-a5b5-922694e229f1", "451e1c55-c0f9-45dd-b384-bd98aa22b5fd",
-    "f1331ed6-1bad-4a9f-a946-52962341220e", "fd88a5ca-8e3b-49ea-a1ab-bf9c89829214",
-    "194ac85e-324b-4e5b-ba15-a089d8ff8b8f", "5b055694-13e2-4233-85bd-ffaf214b6c3e",
-    "bd016f7f-603b-4543-b3a8-d18b8269bc4a", "958aa6e0-bc43-4c8f-9fe3-64b7a42451b2",
-    "dddff9d9-5720-478b-901f-8ca3207bd9ae",
 
-    # Dataset 32
-    "287eb099-7874-4aea-8371-1b16e2b542ad", "7341009d-7377-4801-9829-1f9881cba3bc",
-    "f292a550-0a7d-4915-b33b-bb6bf9848830", "76fe9797-fae4-4ebc-9631-459c0abe5b3a",
-    "4186cb2d-4b34-41d1-af54-be1b0b470de5", "56a899a1-9400-409e-a044-4c9fd7e6ad39",
-    "db2b8b01-e3f9-4ea4-a5d2-9ea4fbe542a8", "151ee06b-e60d-41a8-83bd-024f312044fe",
-    "74850428-ba4c-4993-96e9-635e91e16f07", "3a0d3840-14ac-472c-9433-8178eae5fd3f",
-    "d76eeccd-0d10-419f-a226-fc0c89f388f5", "cb73a702-0465-43b1-9671-c5f146d7545b",
-    "93fc3c17-2f88-41c1-b62f-8106206bc73a", "13090a07-35be-4321-aaca-523badddfab4",
-    "89225310-823b-4a4a-bfb1-82638f6c5001", "a0130db3-2b57-4093-ac1e-06b6bd12fd0a",
-    "c9adcc82-edd1-46f6-accd-5a964aacbdee", "8a93e4ae-5256-4a06-acbb-e5ba42133491",
-    "0c43b3b1-ee19-488d-9ea7-2cffc7b85893", "9a9fc6ed-c3a1-4c0a-9b26-086dd75057a5",
-    "6542671b-d022-4e50-88fa-c5314805dc28", "c4d7c33f-dcf0-4d69-bfb4-f30b6948c11a",
-    "a72605f1-5b9a-482b-a11f-fd5c5f3ca76e", "953cce57-f55a-4d40-ba70-9421dfee49ab",
-    "2d90fa97-7137-479e-bcd5-cc231dd0a978", "ddec2b46-602c-4692-b529-fd775ba13b3e",
-    "55c746f4-086d-46d8-9a35-e775ba356260", "05675c1e-1fbe-42ca-a6cf-40827590699d",
-    "0c6a8464-535a-43c2-8ff6-80d998cdd606", "9324d102-83e1-4651-acf5-3559ebbf74df",
-    "6a020a6f-3978-4b9e-b08f-4b8ae1c7e7bc", "10c39255-c132-4a1b-b898-e304da85e166",
-    "0c9428cd-0448-4977-8793-368d762dda26", "f980d6c8-25d7-4386-9053-b17cbc8c7896",
-    "a04b2bbb-608c-4fb1-9426-82fcfd15938b", "ef97d042-0ba1-4c45-aa67-c6c2d0a72689",
-    "6be22ad7-505d-4f89-8f1e-7b5f5380b29c", "d3db09e6-fe79-4b4b-8a15-f2fa8b6208af",
-    "2dfc9297-c557-4dd1-ad07-38159fd713bb", "5f9ae58c-1809-462c-bd6b-e81913ab5bfe",
-    "6055a159-4201-4c65-96f1-ebaa95518bf9", "8df0f100-bca3-4ce6-878b-72f30e6c2df6",
-    "662a5ef1-cb5c-4e89-9680-ec7296e89425", "0f52839a-d551-42b2-a4ad-b5c2ee930490",
-    "7fa0bac1-17ab-4cc8-8eca-0dc888b09ce9", "279cd73e-1b3b-4a29-a826-028d39b8e78d",
-    "023ade10-0cfa-4787-9c35-5a3e4e53bf88", "d3541d0b-3c78-41c4-8cde-56e9ae100aae",
-    "636badc7-d069-47a1-885d-f4d8373a86db", "a0228a08-5d66-4683-bf8d-1a9970940956",
-    "9133e4de-7fca-48f5-a19a-52b224325f44", "1875c7b3-f0a7-4b01-9e05-6c338576acaa",
-    "4b3541ae-5cd7-474b-a781-f8a29df03d3d", "c622a44c-b48f-48bd-8528-c244942549e6",
-    "3a908505-6813-4840-8ffb-53cf3d960eca", "c2eb1a11-f4d1-4e2a-90b6-353511be37d9",
-    "affbdacc-ecce-4e88-b671-2e1ff85f0034", "8f501399-e747-4022-a0e6-72d94cc8c1a4",
-    "8e229365-e29a-4321-b70a-401c14b12139", "8c5f8a42-43aa-4421-8bd8-435fdb3f16f8",
-    "653f27c6-1001-45f8-8ddb-6d610bfc4740", "dcf22af4-2648-458a-9f20-da15f2170069",
-    "63518446-4f83-46ab-a436-305ca03fa61c",
+def _print_report(results: model.Results, n_posts: int) -> None:
+    best = results.best
+    base = model.BASELINE
 
-    # Dataset 33
-    "c2a26675-25ae-4f3f-be49-0a8b296d9028", "a2299350-5477-417f-a276-57482b17f2ff",
-    "428b27da-8bef-4dc1-a5d3-fea102fe19a7", "ac9fac2b-0f8e-42bc-83bb-e796e7a41b1c",
-    "4250d039-af47-4f72-bffe-8bd92cd495fb", "b4ea9f89-e28e-4e4e-94ac-af4e3de68e44",
-    "d2e68c2a-e533-4b9d-b445-e108a96985bc", "78e523fd-371e-4fda-9827-dc5952b06623",
-    "b2618c9e-580d-4066-b398-751cf6431895", "968de04a-0e7f-4c50-8ffe-37d383cf1db2",
-    "65d428b9-2661-4965-9e11-aea4e94392d2", "78d4a2dd-52fc-426c-83fe-9b6021323103",
-    "e222e02b-6d96-4bc8-9dcf-46a0400c46a6", "5ea583c9-39c3-4498-8daf-66486e0cf53f",
-    "3a8cba38-75bf-4122-ab4c-725fc3c19227", "4d0d9062-b974-4249-94f3-48bcf5b7cf62",
-    "e03e17b4-1781-48a1-aa6e-8dde293ef5f6", "883f25fe-1f67-41b1-a27f-2736c9497def",
-    "7d8b8b04-b115-4aaa-850d-bbe8c20e65aa", "5198d1bd-fb3b-4146-ba1a-c24947b54417",
-    "547bc5a7-0a86-405b-8ab5-af51443bb20d", "423c6346-434b-4268-8aea-fe3f97515df0",
-    "3ae0c398-aaa7-4d13-a1d4-2e958e649f92", "0169a3ed-65c3-440c-b5e9-1e8b810037f6",
-    "9807677a-3c1c-4faa-bdcd-c0cee835403c", "029b4792-e207-4a81-95af-347e37aae0b4",
-    "b4b38a5d-9046-4d4a-ba80-9125ecbaf0f2", "ee3ed9df-9b4d-4706-87f5-1828e8f00109"
-}
+    print("\n" + "=" * 64)
+    print("  BOT-OR-NOT  --  detection report")
+    print("=" * 64)
+    print(
+        f"  Dataset : {results.n_users} users  "
+        f"({results.n_bots} bots / {results.n_users - results.n_bots} humans), "
+        f"{n_posts:,} posts"
+    )
+    print(f"  Features: {results.n_features} behavioural signals per user")
 
-def load_and_preprocess(filepath):
-    try:
-        df = pd.read_csv(filepath)
-        print(f"Loaded {len(df)} rows from {filepath}")
-    except FileNotFoundError:
-        print(f"Error: {filepath} not found.")
-        return None, None
+    print("\n  Model comparison (5-fold out-of-fold):")
+    print(f"  {'model':26} {'ROC-AUC':>8} {'PR-AUC':>8} {'bot-R':>7} {'bot-F1':>7}")
+    print("  " + "-" * 58)
+    for ev in results.evaluations.values():
+        marker = " *" if ev.name == results.selected else "  "
+        print(
+            f"  {ev.name:26} {ev.roc_auc:8.3f} {ev.pr_auc:8.3f} "
+            f"{ev.bot_recall:7.3f} {ev.bot_f1:7.3f}{marker}"
+        )
+    print(f"\n  Selected: {results.selected}  (* )")
 
-    exclude_cols = {'user_id', 'username', 'name', 'location', 'z_score', 
-                   'post_id', 'text', 'created_at', 'lang'}
-    
-    characteristic_cols = [c for c in df.columns if c not in exclude_cols]
-    
-    numeric_characteristic_cols = []
-    for col in characteristic_cols:
-        if pd.api.types.is_numeric_dtype(df[col]):
-            numeric_characteristic_cols.append(col)
-    
-    agg_rules = {
-        'z_score': 'first',
-        'location': 'first',
-        'text': 'count'
-    }
-    
-    for col in numeric_characteristic_cols:
-        agg_rules[col] = 'first'
+    print("\n  Improvement over original pipeline:")
+    print(f"  {'metric':16} {'original':>10} {'improved':>10} {'delta':>8}")
+    print("  " + "-" * 46)
+    for key, label in [
+        ("accuracy", "accuracy"),
+        ("bot_recall", "bot recall"),
+        ("bot_f1", "bot F1"),
+    ]:
+        b = base[key]
+        n = getattr(best, key)
+        print(f"  {label:16} {b:10.2f} {n:10.2f} {n - b:+8.2f}")
 
-    user_df = df.groupby('user_id').agg(agg_rules).rename(columns={'text': 'post_count'}).reset_index()
+    print("\n  Top signals:")
+    for name, score in results.importances[:6]:
+        print(f"    {score:6.3f}  {name}")
+    print("=" * 64 + "\n")
 
-    user_df['has_location'] = user_df['location'].apply(lambda x: 1 if pd.notnull(x) and str(x).strip() != "" else 0)
-    user_df['isBot'] = user_df['user_id'].apply(lambda x: 1 if x in bot_uuids else 0)
 
-    cols_to_fill = ['z_score'] + numeric_characteristic_cols
-    for col in cols_to_fill:
-        user_df[col] = user_df[col].fillna(0)
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Run the Bot-or-Not pipeline.")
+    ap.add_argument("--no-export", action="store_true", help="don't write artifacts")
+    ap.add_argument("--quiet", action="store_true", help="suppress the report")
+    args = ap.parse_args()
 
-    current_feature_cols = ['post_count', 'z_score', 'has_location'] + numeric_characteristic_cols
-    
-    return user_df, current_feature_cols
+    print("Loading datasets and engineering features ...")
+    n_posts = sum(len(u.posts) for u in load_users())
+    table = build_feature_table()
 
-print("--- Processing Training Data ---")
-train_df, train_features = load_and_preprocess(TRAIN_FILE)
+    print("Benchmarking models with stratified cross-validation ...")
+    results = model.run(table)
 
-print("\n--- Processing Testing Data ---")
-test_df, _ = load_and_preprocess(TEST_FILE)
+    if not args.quiet:
+        _print_report(results, n_posts)
 
-if train_df is not None and test_df is not None:
-    print(f"\nTraining Features detected: {train_features}")
-    
-    for col in train_features:
-        if col not in test_df.columns:
-            print(f"Warning: Feature '{col}' missing in test data. Filling with 0.")
-            test_df[col] = 0
-            
-    X_train = train_df[train_features]
-    y_train = train_df['isBot']
-    
-    X_test = test_df[train_features] 
-    y_test = test_df['isBot']
+    if not args.no_export:
+        save_feature_table(table, FEATURES_CSV)
+        payload = export.build_payload(results, n_posts)
+        export.write_payload(payload, RESULTS_JSON)
+        export.write_js_payload(payload, RESULTS_JS)
+        print(f"Wrote {FEATURES_CSV}, {RESULTS_JSON} and {RESULTS_JS}")
 
-    print(f"\nTraining Set: {len(X_train)} users")
-    print(f"Testing Set:  {len(X_test)} users")
 
-    rf_classifier = RandomForestClassifier(n_estimators=100, random_state=42)
-    rf_classifier.fit(X_train, y_train)
-
-    y_pred = rf_classifier.predict(X_test)
-
-    print(f"\nModel Accuracy on Test File: {accuracy_score(y_test, y_pred):.2f}")
-    print("\nClassification Report:\n", classification_report(y_test, y_pred))
-
-    importances = rf_classifier.feature_importances_
-    indices = np.argsort(importances)[::-1]
-    print("\nFeature Importances:")
-    for f in range(len(train_features)):
-        print(f"{f + 1}. {train_features[indices[f]]} ({importances[indices[f]]:.4f})")
+if __name__ == "__main__":
+    main()
