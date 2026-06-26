@@ -117,3 +117,7 @@ posts**, **184 bots** (~21%). Each round ships a `dataset.posts&users.NN.json` a
 ## Tech
 
 Python · pandas · NumPy · scikit-learn · python-dateutil · vanilla JS + SVG (no frontend build step).
+
+## Authors
+
+Built by **Enkai Liu** & **Travis Tsang**.
